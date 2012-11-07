@@ -90,17 +90,22 @@ decode_shb(<<16#0a0d0d0a:32, Length:32/bits, ByteOrderMagic:32/bits,
 		    <<16#1a2b3c4d:32/big-integer>> ->
 			big
 		end,
-    decode_shb(?UINT32(Length) - 28, Rest, ByteOrder, ?UINT16(Major), ?UINT16(Minor), ?UINT64(SectionLength)).
+    decode_shb(?UINT32(Length) - 28, Rest, ByteOrder, ?UINT16(Major), ?UINT16(Minor), ?UINT64(SectionLength));
+decode_shb(_) ->
+    need_mode_data.
 
 decode_shb(Length, Data, ByteOrder, Major, Minor, SectionLength)
-  when byte_size(Data) >= Length ->
+  when byte_size(Data) >= Length + 4 ->
     case Data of
 	<<PayLoad:Length/bytes, _BLength:32/bits, NextBlock/binary>> ->
 	    SHB = {shb, {Major, Minor}, decode_options(PayLoad, ByteOrder, fun decode_shb_option/3, [])},
 	    {ByteOrder, sectionlength(SectionLength), SHB, NextBlock};
 	_ ->
 	    error(badarg, [Length, Data, ByteOrder, Major, Minor, SectionLength])
-    end.
+    end;
+decode_shb(_, _, _, _, _, _) ->
+    need_mode_data.
+
 
 ifd_code(name)		-> 2;
 ifd_code(description)	-> 3;
@@ -265,7 +270,8 @@ decode_block_payload(6, <<InterfaceId:32/bits, TStampHigh:32/bits, TStampLow:32/
 decode_block_payload(Type, PayLoad, _ByteOrder) ->
     {Type, PayLoad}.
 
-decode_block(Type, Length, Data, ByteOrder, SectionLength) ->
+decode_block(Type, Length, Data, ByteOrder, SectionLength)
+  when byte_size(Data) >= Length - 8 ->
     PayLoadLen = Length - 12,
     case Data of
 	<<PayLoad:PayLoadLen/bytes, BLength:32/bits, Next/binary>> ->
@@ -273,7 +279,9 @@ decode_block(Type, Length, Data, ByteOrder, SectionLength) ->
 	    {Block, sectionlength_sub(SectionLength, Length), Next};
 	_ ->
 	    error(badarg, [Type, Length, Data, ByteOrder, SectionLength])
-    end.
+    end;
+decode_block(_, _, _, _, _) ->
+    need_more_data.
 
 decode_block(<<16#0a0d0d0a:32, _/binary>>, _, undefined) ->
     shb;
@@ -320,7 +328,7 @@ decode_next(ByteOrder, SectionLength, Data, Acc) ->
 	{Block, NewSectionLength, NextBlock} ->
 	    decode_next(ByteOrder, NewSectionLength, NextBlock, [Block|Acc])
     end.
-	
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
