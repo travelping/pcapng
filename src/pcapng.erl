@@ -6,10 +6,9 @@
 -compile(inline).
 -compile({inline,[decode_block/3, decode_options/3, decode_options/5]}).
 
-
--define(UINT16(X), uint16(X, ByteOrder)).
--define(UINT32(X), uint32(X, ByteOrder)).
--define(UINT64(X), uint64(X, ByteOrder)).
+%%%===================================================================
+%%% API
+%%%===================================================================
 
 decode_init() ->
     {init, undefined, <<>>}.
@@ -33,6 +32,33 @@ decode_first(Data) ->
 
 encode(_Data) ->
     ok.
+%%%===================================================================
+%%% Helper
+%%%===================================================================
+
+pad_length(Width, Length) ->
+    (Width - Length rem Width) rem Width.
+
+uint16(<<Value:16/little-integer>>, little) ->
+    Value;
+uint16(<<Value:16/big-integer>>, big) ->
+    Value.
+uint32(<<Value:32/little-integer>>, little) ->
+    Value;
+uint32(<<Value:32/big-integer>>, big) ->
+    Value.
+uint64(<<Value:64/little-integer>>, little) ->
+    Value;
+uint64(<<Value:64/big-integer>>, big) ->
+    Value.
+
+-define(UINT16(X), uint16(X, ByteOrder)).
+-define(UINT32(X), uint32(X, ByteOrder)).
+-define(UINT64(X), uint64(X, ByteOrder)).
+
+%%%===================================================================
+%%% Decoder functions
+%%%===================================================================
 
 decode_option(0, <<>>, _, _) ->
     [];
@@ -333,18 +359,3 @@ decode_next(ByteOrder, SectionLength, Data, Acc) ->
 %%% Internal functions
 %%%===================================================================
 
-pad_length(Width, Length) ->
-    (Width - Length rem Width) rem Width.
-
-uint16(<<Value:16/little-integer>>, little) ->
-    Value;
-uint16(<<Value:16/big-integer>>, big) ->
-    Value.
-uint32(<<Value:32/little-integer>>, little) ->
-    Value;
-uint32(<<Value:32/big-integer>>, big) ->
-    Value.
-uint64(<<Value:64/little-integer>>, little) ->
-    Value;
-uint64(<<Value:64/big-integer>>, big) ->
-    Value.
