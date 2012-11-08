@@ -75,8 +75,8 @@ decode_options(Code, Length, Data, ByteOrder, Fun)
     <<Option:Length/bytes, _Pad:PadLength/bytes, Rest/binary>> = Data,
     {decode_option(Code, Option, ByteOrder, Fun), Rest}.
 
-decode_options(<<Code:16/little-integer, Length:16/little-integer, Data/binary>>, little, Fun) ->
-    decode_options(Code, Length, Data, little, Fun).
+decode_options(<<Code:16/bits, Length:16/bits, Data/binary>>, ByteOrder, Fun) ->
+    decode_options(?UINT16(Code), ?UINT16(Length), Data, ByteOrder, Fun).
 
 decode_options(<<>>, _, _, Acc) ->
     lists:reverse(Acc);
