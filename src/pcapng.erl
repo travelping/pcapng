@@ -292,7 +292,7 @@ decode_block_payload(4, Data, ByteOrder) ->
     {nrb, Records, decode_options(Options, ByteOrder, fun decode_nrb_option/3, [])};
 decode_block_payload(5, <<InterfaceId:32/bits, TStampHigh:32/bits, TStampLow:32/bits,
 			  Options/binary>>, ByteOrder) ->
-    {isb, ?UINT32(InterfaceId), ?UINT32(TStampHigh), ?UINT32(TStampLow),
+    {isb, ?UINT32(InterfaceId), {?UINT32(TStampHigh), ?UINT32(TStampLow)},
      decode_options(Options, ByteOrder, fun decode_isb_option/3, [])};
 decode_block_payload(6, <<InterfaceId:32/bits, TStampHigh:32/bits, TStampLow:32/bits,
 			  CaptureLen:32/bits, PacketLen:32/bits, Data/binary>>, ByteOrder) ->
