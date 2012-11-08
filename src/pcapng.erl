@@ -93,12 +93,17 @@ sectionlength(16#ffffffffffffffff) ->
 sectionlength(X) ->
     X.
 
-decode_shb_option(2, Value, _) ->
-    {hardware, Value};
-decode_shb_option(3, Value, _) ->
-    {os, Value};
-decode_shb_option(4, Value, _) ->
-    {userappl, Value};
+shb_code(hardware)	-> 2;
+shb_code(os)		-> 3;
+shb_code(userappl)	-> 4;
+
+shb_code(2)	-> hardware;
+shb_code(3)	-> os;
+shb_code(4)	-> userappl;
+shb_code(X) when is_integer(X) -> X.
+
+decode_shb_option(Code, Value, _) when Code =< 4 ->
+    {shb_code(Code), Value};
 decode_shb_option(Code, Value, ByteOrder) ->
     error(badarg, [Code, Value, ByteOrder]).
 
