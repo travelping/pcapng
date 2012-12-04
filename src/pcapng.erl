@@ -56,9 +56,15 @@ uint64(<<Value:64/little-integer>>, little) ->
 uint64(<<Value:64/big-integer>>, big) ->
     Value.
 
+dblword64(<<High:32/little-integer, Low:32/little-integer>>, little) ->
+    (High bsl 32) + Low;
+dblword64(<<Value:64/big-integer>>, big) ->
+    Value.
+
 -define(UINT16(X), uint16(X, ByteOrder)).
 -define(UINT32(X), uint32(X, ByteOrder)).
 -define(UINT64(X), uint64(X, ByteOrder)).
+-define(DBLWORD64(X), dblword64(X, ByteOrder)).
 
 %% join a List of binaries, seperate them by Sep
 binary_join(List, Sep) ->
@@ -72,28 +78,30 @@ decode_option(0, <<>>, _, _) ->
     [];
 decode_option(1, Value, _, _) ->
     {comment, Value};
-decode_option(Code, Value, ByteOrder, Fun = undefined) ->
-    error(badarg, [Code, Value, ByteOrder, Fun]);
-decode_option(Code, Value, ByteOrder, Fun) ->
-    Fun(Code, Value, ByteOrder).
+decode_option(Code, Value, ByteOrder, {CodeFun, OptsFun}) ->
+    case CodeFun(Code) of
+	C when is_atom(C) ->
+	    OptsFun(C, Value, ByteOrder);
+	_ -> error(badarg, [Code, Value, ByteOrder])
+    end.
 
-decode_options(Code, Length, Data, ByteOrder, Fun)
+decode_options(Code, Length, Data, ByteOrder, Funs)
   when byte_size(Data) >= Length ->
     PadLength = pad_length(4, Length),
     <<Option:Length/bytes, _Pad:PadLength/bytes, Rest/binary>> = Data,
-    {decode_option(Code, Option, ByteOrder, Fun), Rest}.
+    {decode_option(Code, Option, ByteOrder, Funs), Rest}.
 
-decode_options(<<Code:16/bits, Length:16/bits, Data/binary>>, ByteOrder, Fun) ->
-    decode_options(?UINT16(Code), ?UINT16(Length), Data, ByteOrder, Fun).
+decode_options(<<Code:16/bits, Length:16/bits, Data/binary>>, ByteOrder, Funs) ->
+    decode_options(?UINT16(Code), ?UINT16(Length), Data, ByteOrder, Funs).
 
 decode_options(<<>>, _, _, Acc) ->
     lists:reverse(Acc);
-decode_options(Data, ByteOrder, Fun, Acc) ->
-	case decode_options(Data, ByteOrder, Fun) of
+decode_options(Data, ByteOrder, Funs, Acc) ->
+	case decode_options(Data, ByteOrder, Funs) of
 	    {[], <<>>} ->
 		lists:reverse(Acc);
 	    {Opt, Next} ->
-		decode_options(Next, ByteOrder, Fun, [Opt|Acc])
+		decode_options(Next, ByteOrder, Funs, [Opt|Acc])
 	end.
 
 sectionlength(16#ffffffffffffffff) ->
@@ -110,10 +118,8 @@ shb_code(3)	-> os;
 shb_code(4)	-> userappl;
 shb_code(X) when is_integer(X) -> X.
 
-decode_shb_option(Code, Value, _) when Code =< 4 ->
-    {shb_code(Code), Value};
-decode_shb_option(Code, Value, ByteOrder) ->
-    error(badarg, [Code, Value, ByteOrder]).
+decode_shb_option(Code, Value, _) ->
+    {Code, Value}.
 
 sectionlength_sub(undefined, _) ->
     undefined;
@@ -137,7 +143,7 @@ decode_shb(Length, Data, ByteOrder, Major, Minor, SectionLength)
   when byte_size(Data) >= Length + 4 ->
     case Data of
 	<<PayLoad:Length/bytes, _BLength:32/bits, NextBlock/binary>> ->
-	    SHB = {shb, {Major, Minor}, decode_options(PayLoad, ByteOrder, fun decode_shb_option/3, [])},
+	    SHB = {shb, {Major, Minor}, decode_options(PayLoad, ByteOrder, {fun shb_code/1, fun decode_shb_option/3}, [])},
 	    {ByteOrder, sectionlength(SectionLength), SHB, NextBlock};
 	_ ->
 	    error(badarg, [Length, Data, ByteOrder, Major, Minor, SectionLength])
@@ -179,10 +185,14 @@ ifd_code(X) when is_integer(X) -> X.
 epb_code(flags)		-> 2;
 epb_code(hash)		-> 3;
 epb_code(dropcount)	-> 4;
+epb_code(monitor_id)	-> 16#8001;
+epb_code(session_id)	-> 16#8002;
 
-epb_code(2)	-> flags;
-epb_code(3)	-> hash;
-epb_code(4)	-> dropcount;
+epb_code(2)		-> flags;
+epb_code(3)		-> hash;
+epb_code(4)		-> dropcount;
+epb_code(16#8001)	-> monitor_id;
+epb_code(16#8002)	-> session_id;
 
 epb_code(X) when is_integer(X) -> X.
 
@@ -214,37 +224,31 @@ isb_code(8)	-> usrdeliv;
 
 isb_code(X) when is_integer(X) -> X.
 
-decode_ifd_option(Code, Value, _ByteOrder) when Code =< 14 ->
-    {ifd_code(Code), Value};
-decode_ifd_option(Code, Value, ByteOrder) ->
-    error(badarg, [Code, Value, ByteOrder]).
+decode_ifd_option(Code, Value, _ByteOrder) ->
+    {Code, Value}.
 
-decode_epb_option(Code, Value, _ByteOrder) when Code =< 4 ->
-    {epb_code(Code), Value};
-decode_epb_option(Code, Value, ByteOrder) ->
-    error(badarg, [Code, Value, ByteOrder]).
+decode_epb_option(monitor_id, Value, ByteOrder) ->
+    {monitor_id, ?UINT32(Value)};
+decode_epb_option(Code, Value, _ByteOrder) ->
+    {Code, Value}.
 
-decode_nrb_option(Code, Value, _ByteOrder) when Code =< 4 ->
-    {nrb_code(Code), Value};
-decode_nrb_option(Code, Value, ByteOrder) ->
-    error(badarg, [Code, Value, ByteOrder]).
+decode_nrb_option(Code, Value, _ByteOrder) ->
+    {Code, Value}.
 
-decode_isb_option(Code, Value, _ByteOrder) when Code =< 8 ->
-    {isb_code(Code), Value};
-decode_isb_option(Code, Value, ByteOrder) ->
-    error(badarg, [Code, Value, ByteOrder]).
+decode_isb_option(Code, Value, _ByteOrder) ->
+    {Code, Value}.
 
-decode_pb(InterfaceId, DropsCount, TStampHigh, TStampLow, CaptureLen, PacketLen, Data, ByteOrder) ->
+decode_pb(InterfaceId, DropsCount, TStamp, CaptureLen, PacketLen, Data, ByteOrder) ->
     PadLength = pad_length(4, CaptureLen),
     case Data of
 	<<PacketData:CaptureLen/bytes>> ->
 	    %% no padding, this seems to violate Section 3.5, but wireshark accepts these frames
 	    %% don't care much, since Packet Blocks are obsoleted
-	    {pb, InterfaceId, DropsCount, {TStampHigh, TStampLow}, PacketLen, [], PacketData};
+	    {pb, InterfaceId, DropsCount, TStamp, PacketLen, [], PacketData};
 	<<PacketData:CaptureLen/bytes, _Pad:PadLength/bytes, Options/binary>> ->
-	    {pb, InterfaceId, DropsCount, {TStampHigh, TStampLow}, PacketLen, decode_options(Options, ByteOrder, fun decode_epb_option/3, []), PacketData};
+	    {pb, InterfaceId, DropsCount, TStamp, PacketLen, decode_options(Options, ByteOrder, {fun epb_code/1, fun decode_epb_option/3}, []), PacketData};
 	_ ->
-	    error(badarg, [InterfaceId, DropsCount, TStampHigh, TStampLow, CaptureLen, PacketLen, Data, ByteOrder])
+	    error(badarg, [InterfaceId, DropsCount, TStamp, CaptureLen, PacketLen, Data, ByteOrder])
     end.
 
 decode_spb(PacketLen, Data, _)
@@ -278,34 +282,33 @@ decode_nrb_records(<<Type:16/bits, Length:16/bits, Data/binary>>, ByteOrder, Acc
 decode_nrb_records(Data, ByteOrder, Acc) ->
     error(badarg, [Data, ByteOrder, Acc]).
 
-decode_epb(InterfaceId, TStampHigh, TStampLow, CaptureLen, PacketLen, Data, ByteOrder)
+decode_epb(InterfaceId, TStamp, CaptureLen, PacketLen, Data, ByteOrder)
   when byte_size(Data) >= CaptureLen ->
     PadLength = pad_length(4, CaptureLen),
     <<PacketData:CaptureLen/bytes, _Pad:PadLength/bytes, Options/binary>> = Data,
-    {epb, InterfaceId, {TStampHigh, TStampLow}, PacketLen, decode_options(Options, ByteOrder, fun decode_epb_option/3, []), PacketData};
-decode_epb(InterfaceId, TStampHigh, TStampLow, CaptureLen, PacketLen, Data, ByteOrder) ->
-    error(badarg, [InterfaceId, TStampHigh, TStampLow, CaptureLen, PacketLen, Data, ByteOrder]).
+    {epb, InterfaceId, TStamp, PacketLen, decode_options(Options, ByteOrder, {fun epb_code/1, fun decode_epb_option/3}, []), PacketData};
+decode_epb(InterfaceId, TStamp, CaptureLen, PacketLen, Data, ByteOrder) ->
+    error(badarg, [InterfaceId, TStamp, CaptureLen, PacketLen, Data, ByteOrder]).
 
 decode_block_payload(1, <<LinkType:16/bits, _Reserved:16/bits, SnapLen:32/bits, Options/binary>>, ByteOrder) ->
-    {ifd, ?UINT16(LinkType), ?UINT32(SnapLen), decode_options(Options, ByteOrder, fun decode_ifd_option/3, [])};
-decode_block_payload(2, <<InterfaceId:16/bits, DropsCount:16/bits,
-			  TStampHigh:32/bits, TStampLow:32/bits,
+    {ifd, ?UINT16(LinkType), ?UINT32(SnapLen), decode_options(Options, ByteOrder, {fun ifd_code/1, fun decode_ifd_option/3}, [])};
+decode_block_payload(2, <<InterfaceId:16/bits, DropsCount:16/bits, TStamp:64/bits,
 			  CaptureLen:32/bits, PacketLen:32/bits, Data/binary>>, ByteOrder) ->
-    decode_pb(?UINT16(InterfaceId), ?UINT16(DropsCount), ?UINT32(TStampHigh), ?UINT32(TStampLow),
+    decode_pb(?UINT16(InterfaceId), ?UINT16(DropsCount), ?DBLWORD64(TStamp),
 	      ?UINT32(CaptureLen), ?UINT32(PacketLen), Data, ByteOrder);
 decode_block_payload(3, <<PacketLen:32/bits, Data/binary>>, ByteOrder) ->
     decode_spb(?UINT32(PacketLen), Data, ByteOrder);
 decode_block_payload(4, Data, ByteOrder) ->
     {Records, Options} = decode_nrb_records(Data, ByteOrder, []),
-    {nrb, Records, decode_options(Options, ByteOrder, fun decode_nrb_option/3, [])};
-decode_block_payload(5, <<InterfaceId:32/bits, TStampHigh:32/bits, TStampLow:32/bits,
+    {nrb, Records, decode_options(Options, ByteOrder, {fun nrb_code/1, fun decode_nrb_option/3}, [])};
+decode_block_payload(5, <<InterfaceId:32/bits, TStamp:64/bits,
 			  Options/binary>>, ByteOrder) ->
-    {isb, ?UINT32(InterfaceId), {?UINT32(TStampHigh), ?UINT32(TStampLow)},
-     decode_options(Options, ByteOrder, fun decode_isb_option/3, [])};
-decode_block_payload(6, <<InterfaceId:32/bits, TStampHigh:32/bits, TStampLow:32/bits,
-			  CaptureLen:32/bits, PacketLen:32/bits, Data/binary>>, ByteOrder) ->
-    decode_epb(?UINT32(InterfaceId), ?UINT32(TStampHigh), ?UINT32(TStampLow),
-	       ?UINT32(CaptureLen), ?UINT32(PacketLen), Data, ByteOrder);
+    {isb, ?UINT32(InterfaceId), ?DBLWORD64(TStamp),
+     decode_options(Options, ByteOrder, {fun isb_code/1, fun decode_isb_option/3}, [])};
+decode_block_payload(6, <<InterfaceId:32/bits, TStamp:64/bits, CaptureLen:32/bits,
+			  PacketLen:32/bits, Data/binary>>, ByteOrder) ->
+    decode_epb(?UINT32(InterfaceId), ?DBLWORD64(TStamp), ?UINT32(CaptureLen),
+	       ?UINT32(PacketLen), Data, ByteOrder);
 decode_block_payload(Type, PayLoad, _ByteOrder) ->
     {Type, PayLoad}.
 
@@ -313,7 +316,7 @@ decode_block(Type, Length, Data, ByteOrder, SectionLength)
   when byte_size(Data) >= Length - 8 ->
     PayLoadLen = Length - 12,
     case Data of
-	<<PayLoad:PayLoadLen/bytes, BLength:32/bits, Next/binary>> ->
+	<<PayLoad:PayLoadLen/bytes, _BLength:32/bits, Next/binary>> ->
 	    Block = decode_block_payload(Type, PayLoad, ByteOrder),
 	    {Block, sectionlength_sub(SectionLength, Length), Next};
 	_ ->
@@ -380,7 +383,7 @@ enc_opt(Code, Value)
 enc_opt(Code, Value) ->
     error(badarg, [Code, Value]).
 
-encode_option({comment, Value}, _Fun) ->
+encode_option({comment, Value}, _Funs) ->
     enc_opt(1, Value);
 encode_option(Opt, Fun) ->
     Fun(Opt).
@@ -395,6 +398,8 @@ encode_shb_options({Code, Value}) ->
 encode_ifd_options({Code, Value}) ->
     enc_opt(ifd_code(Code), Value).
 
+encode_epb_options({monitor_id, Value}) ->
+    enc_opt(epb_code(monitor_id), <<Value:32>>);
 encode_epb_options({Code, Value}) ->
     enc_opt(epb_code(Code), Value).
 
@@ -433,12 +438,12 @@ encode_block({ifd, LinkType, SnapLen, Options}) ->
     Opts = encode_options(Options, fun encode_ifd_options/1),
     Length = 12 + 8 + byte_size(Opts),
     <<1:32, Length:32, LinkType:16, 0:16, SnapLen:32, Opts/binary, Length:32>>;
-encode_block({pb, InterfaceId, DropsCount, {TStampHigh, TStampLow}, PacketLen, Options, PacketData}) ->
+encode_block({pb, InterfaceId, DropsCount, TStamp, PacketLen, Options, PacketData}) ->
     Opts = encode_options(Options, fun encode_epb_options/1),
     CaptureLen = byte_size(PacketData),
     PadLen = pad_length(4, CaptureLen),
     Length = 12 + 20 + CaptureLen + PadLen + byte_size(Opts),
-    <<2:32, Length:32, InterfaceId:16, DropsCount:16, TStampHigh:32, TStampLow:32, CaptureLen:32,
+    <<2:32, Length:32, InterfaceId:16, DropsCount:16, TStamp:64, CaptureLen:32,
       PacketLen:32, PacketData/binary, 0:(PadLen*8), Opts/binary, Length:32>>;
 encode_block({spb, PacketLen, Packet}) ->
     CaptureLen = byte_size(Packet),
@@ -450,16 +455,16 @@ encode_block({nrb, Records, Options}) ->
     Recs = encode_nrb_records(Records),
     Length = 12 + byte_size(Recs) + byte_size(Opts),
     <<4:32, Length:32, Recs/binary, Opts/binary, Length:32>>;
-encode_block({isb, InterfaceId, {TStampHigh, TStampLow}, Options}) ->
+encode_block({isb, InterfaceId, TStamp, Options}) ->
     Opts = encode_options(Options, fun encode_isb_options/1),
     Length = 12 + 12 + byte_size(Opts),
-    <<5:32, Length:32, InterfaceId:32, TStampHigh:32, TStampLow:32, Opts/binary, Length:32>>;
-encode_block({epb, InterfaceId, {TStampHigh, TStampLow}, PacketLen, Options, PacketData}) ->
+    <<5:32, Length:32, InterfaceId:32, TStamp:64, Opts/binary, Length:32>>;
+encode_block({epb, InterfaceId, TStamp, PacketLen, Options, PacketData}) ->
     Opts = encode_options(Options, fun encode_epb_options/1),
     CaptureLen = byte_size(PacketData),
     PadLen = pad_length(4, CaptureLen),
     Length = 12 + 20 + CaptureLen + PadLen + byte_size(Opts),
-    <<2:32, Length:32, InterfaceId:32, TStampHigh:32, TStampLow:32, CaptureLen:32,
+    <<2:32, Length:32, InterfaceId:32, TStamp:64, CaptureLen:32,
       PacketLen:32, PacketData/binary, 0:(PadLen*8), Opts/binary, Length:32>>;
 encode_block(Block) ->
     error(badarg, [Block]).
