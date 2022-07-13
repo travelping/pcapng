@@ -3,3 +3,4 @@
 /ebin/*.app
 /tetrapak/.local.cache
 /test-log
+_build/
